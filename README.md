@@ -1,5 +1,9 @@
 # Hurst Crypto (Binance)
 
+The Hurst exponent is a statistic that describes long-term memory in a time series:
+values above 0.5 suggest persistence (trend-following), values below 0.5 suggest
+anti-persistence (mean-reversion), and 0.5 is consistent with a random walk.
+
 Compute Hurst exponents for top crypto assets using Binance daily (or other interval) data.
 The project includes a cache-aware downloader with gap detection and a separate analysis
 script that reads only cached data.
