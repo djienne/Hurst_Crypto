@@ -203,12 +203,12 @@ trending_threshold = 0.55
 
 plt.figure(figsize=(12, 6))
 plt.hist(df_hurst["Hurst"], bins=20, color="skyblue", edgecolor="black", alpha=0.7)
-plt.axvline(0.5, color="red", linestyle="--", label="Marche Aleatoire (0.5)")
-plt.axvline(trending_threshold, color="green", linestyle=":", label="Zone de Tendance (>0.55)")
-plt.axvline(mean_reversion_threshold, color="orange", linestyle=":", label="Zone de Range (<0.45)")
-plt.title("Distribution des Exposants de Hurst (Cryptos Binance)")
-plt.xlabel("Exposant de Hurst")
-plt.ylabel("Nombre d'actifs")
+plt.axvline(0.5, color="red", linestyle="--", label="Random Walk (0.5)")
+plt.axvline(trending_threshold, color="green", linestyle=":", label="Trending (>0.55)")
+plt.axvline(mean_reversion_threshold, color="orange", linestyle=":", label="Range-Bound (<0.45)")
+plt.title("Hurst Exponent Distribution (Binance Cryptos)")
+plt.xlabel("Hurst Exponent")
+plt.ylabel("Number of Assets")
 plt.legend()
 plt.grid(True, alpha=0.3)
 finalize_plot("hurst_distribution.png")
@@ -261,7 +261,7 @@ if not trending_assets.empty:
         data[top_ticker],
         label=f"{top_ticker} (H={trending_assets.iloc[0]['Hurst']:.2f})",
     )
-    plt.title(f"Prix de l'actif le plus 'Trend-Following' : {top_ticker}")
+    plt.title(f"Most Trend-Following Asset: {top_ticker}")
     plt.legend()
     plt.grid(True)
     finalize_plot(f"{top_ticker}_trend.png")
@@ -273,7 +273,7 @@ if not ranging_assets.empty:
         data[low_ticker],
         label=f"{low_ticker} (H={ranging_assets.iloc[0]['Hurst']:.2f})",
     )
-    plt.title(f"Prix de l'actif le plus 'Range-Bound' : {low_ticker}")
+    plt.title(f"Most Range-Bound Asset: {low_ticker}")
     plt.legend()
     plt.grid(True)
     finalize_plot(f"{low_ticker}_range.png")
