@@ -4,5 +4,6 @@
   "start_date": "2018-01-01",
   "interval": "1d",
   "rate_limit_seconds": 0.2,
-  "download_concurrency": 5
+  "download_concurrency": 5,
+  "min_history_days": 365
 }

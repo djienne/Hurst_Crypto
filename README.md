@@ -59,6 +59,14 @@ python .\hurst_binance.py
 
 Plots are saved under `plot/` by default.
 
+Example output:
+<p>
+  <img src="plot/hurst_distribution.png" alt="Hurst exponent distribution" width="600" />
+</p>
+<p>
+  <img src="plot/hurst_values.png" alt="Hurst exponent by asset" width="600" />
+</p>
+
 ## Logging
 Enable or disable verbose logs:
 ```

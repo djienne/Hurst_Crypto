@@ -29,6 +29,7 @@ QUOTE_ASSET = "USDT"
 DEFAULT_DATA_DIR = "data"
 DEFAULT_START_DATE = "2018-01-01"
 DEFAULT_INTERVAL = "1d"
+DEFAULT_MIN_HISTORY_DAYS = 365
 
 
 def load_config(path):
@@ -38,6 +39,7 @@ def load_config(path):
         "data_dir": DEFAULT_DATA_DIR,
         "start_date": DEFAULT_START_DATE,
         "interval": DEFAULT_INTERVAL,
+        "min_history_days": DEFAULT_MIN_HISTORY_DAYS,
     }
     try:
         with open(path, "r", encoding="utf-8") as handle:
@@ -72,6 +74,10 @@ def load_config(path):
     interval = user_config.get("interval")
     if isinstance(interval, str) and interval:
         config["interval"] = interval
+
+    min_history_days = user_config.get("min_history_days")
+    if isinstance(min_history_days, int) and min_history_days > 0:
+        config["min_history_days"] = min_history_days
 
 
     return config
@@ -138,6 +144,7 @@ symbols = base_symbols[:num_cryptos]
 data_dir = config["data_dir"]
 start_date = config["start_date"]
 interval = config["interval"]
+min_history_days = config["min_history_days"]
 end_date = None
 end_date_label = "now"
 log(f"Using {len(symbols)} symbols: {symbols}")
@@ -145,6 +152,7 @@ log(f"Cache directory: {data_dir}")
 log(f"Plots directory: {PLOT_DIR} (show={SHOW_PLOTS})")
 log(f"Date range: {start_date} -> {end_date_label}")
 log(f"Interval: {interval}")
+log(f"Minimum history: {min_history_days} days")
 log("Cache-only mode: no downloads will be performed.")
 
 
@@ -156,6 +164,13 @@ for symbol in symbols:
     try:
         df = load_cached_klines_range(symbol, interval, start_date, end_date, data_dir)
         if not df.empty:
+            history_span = df.index.max() - df.index.min()
+            if history_span < pd.Timedelta(days=min_history_days):
+                log(
+                    f"Skipping {symbol}: history {history_span.days} days "
+                    f"< {min_history_days} days."
+                )
+                continue
             close_series[symbol] = df["close"].dropna()
         else:
             log(f"Skipping {symbol}: no cached data in range.")
@@ -197,6 +212,29 @@ plt.ylabel("Nombre d'actifs")
 plt.legend()
 plt.grid(True, alpha=0.3)
 finalize_plot("hurst_distribution.png")
+
+if not df_hurst.empty:
+    df_sorted = df_hurst.sort_values("Hurst", ascending=False)
+    fig_height = max(6, 0.35 * len(df_sorted))
+    plt.figure(figsize=(12, fig_height))
+    bars = plt.barh(df_sorted["Ticker"], df_sorted["Hurst"], color="steelblue")
+    plt.axvline(0.5, color="red", linestyle="--", label="Random Walk (0.5)")
+    plt.axvline(trending_threshold, color="green", linestyle=":", label="Trending (>0.55)")
+    plt.axvline(mean_reversion_threshold, color="orange", linestyle=":", label="Range (<0.45)")
+    plt.gca().invert_yaxis()
+    for bar in bars:
+        width = bar.get_width()
+        y_pos = bar.get_y() + bar.get_height() / 2
+        plt.text(width + 0.01, y_pos, f"{width:.2f}", va="center", fontsize=8)
+    x_min = min(0.0, df_sorted["Hurst"].min() - 0.05)
+    x_max = df_sorted["Hurst"].max() + 0.1
+    plt.xlim(x_min, x_max)
+    plt.title("Hurst Exponent by Asset")
+    plt.xlabel("Hurst Exponent")
+    plt.ylabel("Asset")
+    plt.legend()
+    plt.grid(True, axis="x", alpha=0.3)
+    finalize_plot("hurst_values.png")
 
 
 # --- 6. AFFICHAGE DES RESULTATS ---
