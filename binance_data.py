@@ -17,7 +17,11 @@ DEFAULT_RATE_LIMIT_SECONDS = 0.2
 RATE_LIMIT_SECONDS = DEFAULT_RATE_LIMIT_SECONDS
 _LAST_REQUEST_AT = 0.0
 _RATE_LIMIT_LOCK = threading.Lock()
-STABLECOIN_TAGS = {"stablecoin"}
+# Not crypto: stablecoins, tokenized stocks (NVDAB...), commodity tokens (PAXG).
+EXCLUDED_TAGS = {"stablecoin", "bStocks", "tCommodities"}
+# Wrapped/staked copies of another coin (daily return corr >= 0.998 with BTC/ETH/SOL).
+# Binance gives them no tag, so they are listed by hand.
+DERIVATIVE_BASES = {"WBTC", "WBETH", "BNSOL"}
 STABLECOIN_BASES = {
     "USDT",
     "USDC",
@@ -36,21 +40,22 @@ STABLECOIN_BASES = {
     "USTC",
     "UST",
 }
+# Only intervals that divide a day: their candles open on multiples of the interval
+# since the UTC epoch, so a floored pandas grid matches Binance's. 3d/1w/1M candles
+# are anchored differently (and are too coarse for lags of 2-99 candles).
 INTERVAL_FREQUENCY_MAP = {
     "1m": "1min",
     "3m": "3min",
     "5m": "5min",
     "15m": "15min",
     "30m": "30min",
-    "1h": "1H",
-    "2h": "2H",
-    "4h": "4H",
-    "6h": "6H",
-    "8h": "8H",
-    "12h": "12H",
+    "1h": "1h",
+    "2h": "2h",
+    "4h": "4h",
+    "6h": "6h",
+    "8h": "8h",
+    "12h": "12h",
     "1d": "1D",
-    "3d": "3D",
-    "1w": "1W",
 }
 
 
@@ -119,6 +124,7 @@ def _to_datetime(value):
 
 
 def fetch_binance_klines(symbol, interval, start, end):
+    now_ms = int(time.time() * 1000)  # taken before any request: conservative
     start_ms = _to_millis(start)
     end_ms = _to_millis(end) if end else None
     rows = []
@@ -167,6 +173,8 @@ def fetch_binance_klines(symbol, interval, start, end):
         "taker_buy_quote",
         "ignore",
     ]
+    # Drop the still-open candle: its "close" is just the price at download time.
+    rows = [row for row in rows if row[6] < now_ms]
     df = pd.DataFrame(rows, columns=columns)
     if df.empty:
         return df
@@ -185,14 +193,12 @@ def _to_float(value):
         return 0.0
 
 
-def _is_stablecoin(item):
+def _is_excluded(item):
     tags = item.get("tags") or []
-    base = item.get("b")
-    if any(tag in STABLECOIN_TAGS for tag in tags):
+    base = (item.get("b") or "").upper()
+    if any(tag in EXCLUDED_TAGS for tag in tags):
         return True
-    if base and base.upper() in STABLECOIN_BASES:
-        return True
-    return False
+    return base in STABLECOIN_BASES or base in DERIVATIVE_BASES
 
 
 def fetch_top_market_cap_symbols(num_cryptos, quote_asset="USDT", exclude_stablecoins=True):
@@ -216,7 +222,7 @@ def fetch_top_market_cap_symbols(num_cryptos, quote_asset="USDT", exclude_stable
     for item in rows:
         if item.get("q") != quote_asset:
             continue
-        if exclude_stablecoins and _is_stablecoin(item):
+        if exclude_stablecoins and _is_excluded(item):
             continue
 
         price = _to_float(item.get("c"))
@@ -236,7 +242,11 @@ def fetch_top_market_cap_symbols(num_cryptos, quote_asset="USDT", exclude_stable
 
 
 def _interval_to_frequency(interval):
-    return INTERVAL_FREQUENCY_MAP.get(interval)
+    if interval not in INTERVAL_FREQUENCY_MAP:
+        raise ValueError(
+            f"Unsupported interval {interval!r}; use one of {list(INTERVAL_FREQUENCY_MAP)}"
+        )
+    return INTERVAL_FREQUENCY_MAP[interval]
 
 
 def _normalize_klines(df, label=None):
@@ -303,15 +313,15 @@ def save_cached_klines(symbol, df, data_dir):
 
     os.makedirs(data_dir, exist_ok=True)
     path = _cache_path(symbol, data_dir)
-    df.to_csv(path, index_label="open_time")
+    tmp_path = path + ".tmp"
+    df.to_csv(tmp_path, index_label="open_time")
+    os.replace(tmp_path, path)  # atomic: an interrupted write never corrupts the cache
     _log(f"Cache saved: {path} ({len(df)} rows)")
 
 
 def _expected_index(start_dt, end_dt, interval):
+    """Open times of the candles that have closed by end_dt, on Binance's grid."""
     freq = _interval_to_frequency(interval)
-    if not freq:
-        return None
-
     start_ts = pd.Timestamp(start_dt)
     end_ts = pd.Timestamp(end_dt)
     if start_ts.tzinfo is None:
@@ -319,7 +329,8 @@ def _expected_index(start_dt, end_dt, interval):
     if end_ts.tzinfo is None:
         end_ts = end_ts.tz_localize("UTC")
 
-    return pd.date_range(start=start_ts, end=end_ts, freq=freq)
+    step = pd.Timedelta(freq)
+    return pd.date_range(start=start_ts.floor(freq), end=end_ts - step, freq=freq)
 
 
 def _collapse_missing_ranges(missing_index, step):
@@ -355,7 +366,7 @@ def _format_gap(start, end, count):
 
 
 def _report_gaps(symbol, expected_index, actual_index):
-    if expected_index is None or expected_index.empty:
+    if expected_index.empty:
         return
 
     missing = expected_index.difference(actual_index)
@@ -431,17 +442,9 @@ def fetch_binance_klines_cached(symbol, interval, start, end, data_dir="data"):
         cached_range = _safe_slice(cached_full)
 
     expected = _expected_index(start_dt, end_dt, interval)
-    if expected is None:
-        missing_ranges = []
-        if cached_range.empty:
-            missing_ranges.append((start_dt, end_dt))
-    else:
-        missing = expected.difference(cached_range.index)
-        if missing.empty:
-            missing_ranges = []
-        else:
-            step = expected[1] - expected[0] if len(expected) > 1 else None
-            missing_ranges = _collapse_missing_ranges(missing, step)
+    missing = expected.difference(cached_range.index)
+    step = expected[1] - expected[0] if len(expected) > 1 else None
+    missing_ranges = _collapse_missing_ranges(missing, step)
 
     _log(
         f"{symbol} cached rows: {len(cached_range)} missing ranges: {len(missing_ranges)}"
@@ -465,9 +468,7 @@ def fetch_binance_klines_cached(symbol, interval, start, end, data_dir="data"):
     merged = _normalize_klines(merged, label=symbol)
     save_cached_klines(symbol, merged, data_dir)
 
-    if expected is not None:
-        merged_range = merged.loc[start_dt:end_dt]
-        _report_gaps(symbol, expected, merged_range.index)
+    _report_gaps(symbol, expected, merged.loc[start_dt:end_dt].index)
 
     return merged.loc[start_dt:end_dt]
 
@@ -573,7 +574,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--include-stablecoins",
         action="store_true",
-        help="Include stablecoins in the ranking.",
+        help="Include stablecoins, tokenized stocks/commodities and wrapped duplicates.",
     )
     parser.add_argument(
         "--sample-symbol",
@@ -583,7 +584,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--interval",
         default=default_interval,
-        help="Kline interval (default: 1d).",
+        help=f"Kline interval, one of {list(INTERVAL_FREQUENCY_MAP)} (default: 1d).",
     )
     parser.add_argument("--start", default=default_start, help="Start date (ISO).")
     parser.add_argument("--end", default=None, help="End date (ISO).")
@@ -595,6 +596,7 @@ if __name__ == "__main__":
         help="Max parallel downloads (default from config).",
     )
     args = parser.parse_args()
+    _interval_to_frequency(args.interval)  # fail fast on an unsupported interval
 
     if args.top is not None:
         top = args.top
